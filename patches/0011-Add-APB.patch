@@ -1,0 +1,160 @@
+Index: nmea0183/NMEA0183Messages.cpp
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.cpp
++++ nmea0183/NMEA0183Messages.cpp
+@@ -407,6 +407,101 @@ bool NMEA0183SetZDA(tNMEA0183Msg &NMEA01
+ }
+ 
+ //*****************************************************************************
++bool NMEA0183ParseAPB_nc(const tNMEA0183Msg &NMEA0183Msg, tAPB &APB) {
++
++  bool result=( NMEA0183Msg.FieldCount()>=14 );
++
++  if ( result ) {
++
++    APB.status=NMEA0183Msg.Field(0)[0];
++    APB.cycleLockWarning=NMEA0183Msg.Field(1)[0];
++    APB.xte=NMEA0183GetDouble(NMEA0183Msg.Field(2));
++    //Left is negative in NMEA2000. Right is positive.
++    if (NMEA0183Msg.Field(3)[0]=='R') {
++      APB.xte=-APB.xte;
++    }
++    if (NMEA0183Msg.Field(4)[0]=='N') {
++      APB.xte*=nmTom;
++    } else {
++      //Don't know which other units to expect and which indicator they use.
++      return false;
++    }
++    APB.arrivalAlarm=NMEA0183Msg.Field(5)[0];
++    APB.perpendicularPassed=NMEA0183Msg.Field(6)[0];
++    APB.botw=NMEA0183GetDouble(NMEA0183Msg.Field(7))*degToRad;
++    APB.botwMode=NMEA0183Msg.Field(8)[0];
++    strncpy(APB.destID,NMEA0183Msg.Field(9),sizeof(APB.destID)/sizeof(char));
++    APB.destID[sizeof(APB.destID)/sizeof(char)-1]='\0';
++    APB.btw=NMEA0183GetDouble(NMEA0183Msg.Field(10))*degToRad;
++    APB.btwMode=NMEA0183Msg.Field(11)[0];
++    APB.headingToSteer=NMEA0183GetDouble(NMEA0183Msg.Field(12))*degToRad;
++    APB.headingToSteerMode=NMEA0183Msg.Field(13)[0];
++  }
++
++  return result;
++
++}
++
++//*****************************************************************************
++// $GPAPB,A,A,0.10,R,N,V,V,011,M,DEST,011,M,011,M*hh
++// Internal units:
++//   apb.xte in meters (sentence uses nautical miles with 'N')
++//   apb.botw, apb.btw, apb.headingToSteer in radians
++bool NMEA0183SetAPB(tNMEA0183Msg &NMEA0183Msg, const tAPB &APB, const char *Src) {
++  if ( !NMEA0183Msg.Init("APB", Src) ) return false;
++
++  // Field 0: status
++  if ( !NMEA0183Msg.AddStrField(APB.status == 'A' ? "A" : "V") ) return false;
++
++  // Field 1: cycle lock warning
++  if ( !NMEA0183Msg.AddStrField(APB.cycleLockWarning == 'A' ? "A" : "V") ) return false;
++
++  // Field 2: XTE magnitude (nautical miles)
++  // Field 3: direction to steer; parser treats 'R' as negative
++  // Field 4: units; parser expects 'N' and converts nm->m
++  if ( !NMEA0183IsNA(APB.xte) ) {
++    const double xte_m = APB.xte;
++    const char *dir = (xte_m <= 0 ? "R" : "L");                 // consistent with ParseAPB_nc
++    if ( !NMEA0183Msg.AddDoubleField(fabs(xte_m), 1.0/nmTom) ) return false;
++    if ( !NMEA0183Msg.AddStrField(dir) ) return false;
++    if ( !NMEA0183Msg.AddStrField("N") ) return false;
++  } else {
++    if ( !NMEA0183Msg.AddStrField("") ) return false;          // XTE
++    if ( !NMEA0183Msg.AddStrField("") ) return false;          // dir
++    if ( !NMEA0183Msg.AddStrField("N") ) return false;         // keep units to satisfy parser expectations downstream
++  }
++
++  // Field 5: arrival alarm
++  if ( !NMEA0183Msg.AddStrField(APB.arrivalAlarm == 'A' ? "A" : "") ) return false;
++
++  // Field 6: perpendicular passed
++  if ( !NMEA0183Msg.AddStrField(APB.perpendicularPassed == 'A' ? "A" : "") ) return false;
++
++  // Field 7: BOTW (deg)
++  if ( !NMEA0183Msg.AddDoubleField(APB.botw, radToDeg) ) return false;
++
++  // Field 8: BOTW mode (M/T)
++  if ( !NMEA0183Msg.AddStrField(APB.botwMode == 'M' ? "M" : "T") ) return false;
++
++  // Field 9: destination waypoint ID
++  if ( !NMEA0183Msg.AddStrField(APB.destID) ) return false;
++
++  // Field 10: BTW (deg)
++  if ( !NMEA0183Msg.AddDoubleField(APB.btw, radToDeg) ) return false;
++
++  // Field 11: BTW mode (M/T)
++  if ( !NMEA0183Msg.AddStrField(APB.btwMode == 'M' ? "M" : "T") ) return false;
++
++  // Field 12: heading to steer (deg)
++  if ( !NMEA0183Msg.AddDoubleField(APB.headingToSteer, radToDeg) ) return false;
++
++  // Field 13: heading to steer mode (M/T)
++  if ( !NMEA0183Msg.AddStrField(APB.headingToSteerMode == 'M' ? "M" : "T") ) return false;
++
++  return true;
++}
++
++//*****************************************************************************
+ // $GPRMC,092348.00,A,6035.04228,N,02115.15472,E,0.01,272.61,060815,7.2,E,D*34
+ bool NMEA0183ParseRMC_nc(const tNMEA0183Msg &NMEA0183Msg, double &GPSTime, char &Status, double &Latitude, double &Longitude,
+                       double &TrueCOG, double &SOG, unsigned long &DaysSince1970, double &Variation, time_t *DateTime) {
+Index: nmea0183/NMEA0183Messages.h
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.h
++++ nmea0183/NMEA0183Messages.h
+@@ -157,6 +157,30 @@ struct tZDA {
+ 	int LZMD;
+ };
+ 
++struct tAPB {
++  //Bearing (present position) to waypoint
++  double btw;
++  //Bearing (original position) to waypoint
++  double botw;
++  double headingToSteer;
++  //V = Loran-C Blink or SNR warning V = general warning flag or other navigation systems when a reliable fix is not available
++  //'A' = OK, 'V' = Void (warning)
++  char status;
++  //V = Loran-C Cycle Lock warning flag A = OK or not used
++  char cycleLockWarning;
++  //XTE includes magnitude, direction to steer and units (meters)
++  double xte;
++  //Arrival Circle Entered
++  //'A' = arrived, 'V' = not arrived
++  char arrivalAlarm;
++  //Perpendicular passed at waypoint
++  //'A' = passed, 'V' = not passed
++  char perpendicularPassed;
++  char btwMode; //M = Magnetic, T = True
++  char botwMode; //M = Magnetic, T = True
++  char headingToSteerMode; //M = Magnetic, T = True
++  char destID[NMEA0183_MAX_WP_NAME_LENGTH];
++};
+ 
+ enum tNMEA0183WindReference {
+ 			    // http://caxapa.ru/thumbs/214299/NMEA0183_.pdf
+@@ -612,6 +636,18 @@ inline bool NMEA0183ParseZDA(const tNMEA
+ 
+ bool NMEA0183SetZDA(tNMEA0183Msg &NMEA0183Msg, time_t utc, time_t tz, const char *Src="II");
+ 
++//*****************************************************************************
++//$GPAPB,A,A,0.10,R,N,V,V,011,M,DEST,011,M,011,M*82
++bool NMEA0183ParseAPB_nc(const tNMEA0183Msg &NMEA0183Msg, tAPB &apb);
++
++inline bool NMEA0183ParseAPB(const tNMEA0183Msg &NMEA0183Msg, tAPB &apb) {
++    return (NMEA0183Msg.IsMessageCode("APB") ?
++        NMEA0183ParseAPB_nc(NMEA0183Msg, apb) : false);
++}
++
++//*****************************************************************************
++// APB - Autopilot Sentence "B"
++bool NMEA0183SetAPB(tNMEA0183Msg &NMEA0183Msg, const tAPB &apb, const char *Src="GP");
+ 
+ //*****************************************************************************
+ // Heading will be returned be in radians

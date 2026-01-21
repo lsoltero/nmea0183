@@ -1,0 +1,39 @@
+Index: nmea0183/NMEA0183Messages.h
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.h
++++ nmea0183/NMEA0183Messages.h
+@@ -159,7 +159,11 @@ struct tZDA {
+ 
+ 
+ enum tNMEA0183WindReference {
+-                            NMEA0183Wind_True=0,
++			    // http://caxapa.ru/thumbs/214299/NMEA0183_.pdf
++			    // When the reference field is set to T (Theoretical, calculated actual wind), data is provided giving the wind angle
++			    // in  relation  to  the  vessel's  bow/centerline  and  the  wind  speed  as  if  the  vessel  was  stationary.  On  a
++			    //  moving ship these data can be calculated by combining the measured relative wind with the vessel's own speed.
++                            NMEA0183Wind_Theoretical=0,
+                             // Apparent Wind (relative to the vessel centerline)
+                             NMEA0183Wind_Apparent=1
+                           };
+Index: nmea0183/NMEA0183Messages.cpp
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.cpp
++++ nmea0183/NMEA0183Messages.cpp
+@@ -805,7 +805,7 @@ bool NMEA0183ParseMWV_nc(const tNMEA0183
+   if ( result ) {
+     WindAngle=atof(NMEA0183Msg.Field(0))*degToRad;
+     switch ( NMEA0183Msg.Field(1)[0] ) {
+-      case 'T' : Reference=NMEA0183Wind_True; break;
++      case 'T' : Reference=NMEA0183Wind_Theoretical; break;
+       case 'R' :
+       default : Reference=NMEA0183Wind_Apparent; break;
+     }
+@@ -824,7 +824,7 @@ bool NMEA0183ParseMWV_nc(const tNMEA0183
+ bool NMEA0183SetMWV(tNMEA0183Msg &NMEA0183Msg, double WindAngle, tNMEA0183WindReference Reference, double WindSpeed, const char *Src) {
+   if ( !NMEA0183Msg.Init("MWV",Src) ) return false;
+   if ( !NMEA0183Msg.AddDoubleField(WindAngle,radToDeg) ) return false;
+-  if ( !NMEA0183Msg.AddStrField(Reference==NMEA0183Wind_True?"T":"R") ) return false;
++  if ( !NMEA0183Msg.AddStrField(Reference==NMEA0183Wind_Theoretical?"T":"R") ) return false;
+   if ( !NMEA0183Msg.AddDoubleField(WindSpeed) ) return false;
+   if ( !NMEA0183Msg.AddStrField("M") ) return false;
+   if ( !NMEA0183Msg.AddStrField("A") ) return false;

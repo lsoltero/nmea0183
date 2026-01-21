@@ -1,0 +1,556 @@
+Index: nmea0183/NMEA0183Messages.cpp
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.cpp
++++ nmea0183/NMEA0183Messages.cpp
+@@ -29,6 +29,10 @@ OR THE USE OR OTHER DEALINGS IN THE SOFT
+ #include <stdio.h>
+ 
+ const double pi=3.1415926535897932384626433832795;
++inline double cToKelvin(double x) { return x == NMEA0183DoubleNA ? NMEA0183DoubleNA : x + 273.15; }
++inline double kelvinToC(double x) { return x == NMEA0183DoubleNA ? NMEA0183DoubleNA : x - 273.15; }
++const double barToPascal=100000.0;
++const double pascalToBar=1/100000.0;
+ const double kmhToms=1000.0/3600.0;
+ const double knToms=1852.0/3600.0;
+ const double degToRad=pi/180.0;
+@@ -349,6 +353,58 @@ bool NMEA0183SetRMB(tNMEA0183Msg &NMEA01
+ }
+ 
+ //*****************************************************************************
++// ZDA - Time & Date - UTC, day, month, year and local time zone.
++// $--ZDA,hhmmss.ss,xx,xx,xxxx,xx,xx*hh<CR><LF>
++// $GPZDA,160012.71,11,03,2004,-1,00*7D
++bool NMEA0183ParseZDA_nc(const tNMEA0183Msg &NMEA0183Msg, double &GPSTime, int &GPSDay, int &GPSMonth, int &GPSYear,
++                      int &LZD, int &LZMD) {
++  bool result=( NMEA0183Msg.FieldCount()>=6 );
++
++  if ( result ) {
++    GPSTime=NMEA0183GPTimeToSeconds(NMEA0183Msg.Field(0));
++    GPSDay=atoi(NMEA0183Msg.Field(1));
++    GPSMonth=atoi(NMEA0183Msg.Field(2));
++    GPSYear=atoi(NMEA0183Msg.Field(3));
++    LZD=atoi(NMEA0183Msg.Field(4));
++    LZMD=atoi(NMEA0183Msg.Field(5));
++  }
++
++  return result;
++}
++
++bool NMEA0183ParseZDA_nc(const tNMEA0183Msg &NMEA0183Msg,time_t &utc, time_t &tz) {
++  bool result=( NMEA0183Msg.FieldCount()>=6 );
++  if ( result ) {
++    int day=atoi(NMEA0183Msg.Field(1));
++    int month=atoi(NMEA0183Msg.Field(2));
++    int year=atoi(NMEA0183Msg.Field(3));
++    int tzhours=atoi(NMEA0183Msg.Field(4));
++    int tzmin=atoi(NMEA0183Msg.Field(5));
++    char date[20];
++    snprintf(date,sizeof(date),"%02d%02d%02d", month, day, year-2000);
++    utc = NMEA0183GPSDateTimetotime_t(date, NMEA0183Msg.Field(0));
++    tz = tzhours*3600 + tzmin*60;
++  }
++
++  return result;
++}
++
++bool NMEA0183SetZDA(tNMEA0183Msg &NMEA0183Msg, time_t utc, time_t tz, const char *Src) {
++  if ( !NMEA0183Msg.Init("ZDA",Src) ) return false;
++
++  struct tm *gm = gmtime(&utc);
++  if ( !NMEA0183Msg.AddTimeField(gm->tm_hour*3600+gm->tm_min*60+gm->tm_sec) ) return false;
++  if ( !NMEA0183Msg.AddUInt32Field(gm->tm_mday) ) return false;
++  if ( !NMEA0183Msg.AddUInt32Field(gm->tm_mon+1) ) return false;
++  if ( !NMEA0183Msg.AddUInt32Field(gm->tm_year+1900) ) return false;
++
++  struct tm *z = gmtime(&tz);
++  if ( !NMEA0183Msg.AddUInt32Field(z->tm_hour) ) return false;
++  if ( !NMEA0183Msg.AddUInt32Field(z->tm_min) ) return false;
++  return true;
++}
++
++//*****************************************************************************
+ // $GPRMC,092348.00,A,6035.04228,N,02115.15472,E,0.01,272.61,060815,7.2,E,D*34
+ bool NMEA0183ParseRMC_nc(const tNMEA0183Msg &NMEA0183Msg, double &GPSTime, char &Status, double &Latitude, double &Longitude,
+                       double &TrueCOG, double &SOG, unsigned long &DaysSince1970, double &Variation, time_t *DateTime) {
+@@ -446,6 +502,105 @@ bool NMEA0183SetVTG(tNMEA0183Msg &NMEA01
+ }
+ 
+ //*****************************************************************************
++// XDR - Transducer Measurements
++// XDR,a,x.x,a,c--c,a,x.x,a,c--c*hh
++
++bool NMEA0183ParseXDR_nc(const tNMEA0183Msg &NMEA0183Msg, xdr_t *xdr, size_t &n) {
++  bool result=( NMEA0183Msg.FieldCount() );
++  if ( result % 4 ) return result;
++  unsigned int i;
++  for (i = 0; i%4 < n && i < result; i += 4, xdr++ ) {
++    xdr->TransducerType[0] = NMEA0183Msg.Field(i)[0];
++    xdr->UnitOfMeasure[0] = NMEA0183Msg.Field(i+2)[0];
++    strncpy(xdr->TransducerID, NMEA0183Msg.Field(i+3), sizeof(xdr->TransducerID));
++
++    switch ( xdr->UnitOfMeasure[0] ) {
++    case 'D':
++      xdr->data = NMEA0183GetDouble(NMEA0183Msg.Field(i+1),degToRad);
++      break;
++    case 'C':
++      xdr->data = cToKelvin(NMEA0183GetDouble(NMEA0183Msg.Field(i+1)));
++      break;
++    case 'B':
++      xdr->data = NMEA0183GetDouble(NMEA0183Msg.Field(i+1),barToPascal);
++      break;
++    default:
++      xdr->data = NMEA0183GetDouble(NMEA0183Msg.Field(i+1));
++      break;
++    }
++  }
++  n = i%4;
++  return result;
++}
++
++bool NMEA0183SetXDR(tNMEA0183Msg &NMEA0183Msg, xdr_t *xdr, size_t n, const char *Src) {
++  if ( !NMEA0183Msg.Init("XDR",Src) ) return false;
++
++  for (size_t i = 0; i < n; i++, xdr++ ) {
++    NMEA0183Msg.AddStrField(xdr->TransducerType);
++    switch ( xdr->UnitOfMeasure[0] ) {
++    case 'D':
++      NMEA0183Msg.AddDoubleField( xdr->data, radToDeg);
++      break;
++    case 'C':
++      NMEA0183Msg.AddDoubleField( kelvinToC(xdr->data) );
++      break;
++    case 'B':
++      NMEA0183Msg.AddDoubleField( xdr->data, pascalToBar,"%.4f");
++      break;
++    default:
++      NMEA0183Msg.AddDoubleField( xdr->data );
++      break;
++    }
++    NMEA0183Msg.AddStrField(xdr->UnitOfMeasure);
++    NMEA0183Msg.AddStrField(xdr->TransducerID);
++  }
++  return true;
++}
++
++//*****************************************************************************
++// $--XTE,A,A,x.x,a,N,a*hh
++// - steer left, + right to get back to track.
++bool NMEA0183ParseXTE_nc(const tNMEA0183Msg &NMEA0183Msg, double &xte, xteMode_t &mode) {
++  bool result=( NMEA0183Msg.FieldCount()>=6 );
++  if ( result ) {
++    if ( NMEA0183Msg.Field(0)[0] != 'A' || NMEA0183Msg.Field(1)[0] != 'A' ) return false;
++    xte = NMEA0183GetDouble(NMEA0183Msg.Field(2),nmTom);
++    if ( NMEA0183Msg.Field(3)[0] == 'R' ) xte = -xte;
++    switch ( NMEA0183Msg.Field(5)[0] ) {
++    default:
++    case 'A': mode = xteAutonomous; break;
++    case 'D': mode = xteDifferential; break;
++    case 'E': mode = xteEstimated; break;
++    case 'M': mode = xteManualInput; break;
++    case 'S': mode = xteSimulator; break;
++    }
++  }
++  return result;
++}
++
++bool NMEA0183SetXTE(tNMEA0183Msg &NMEA0183Msg, double xte, xteMode_t mode, const char *Src) {
++  if ( !NMEA0183Msg.Init("XTE",Src) ) return false;
++
++  const char *dir = (xte < 0) ? "R" : "L";
++  const char *stat = (mode == xteAutonomous || mode == xteDifferential) ? "A" : "V";
++  const char *xmode;
++  switch ( mode ) {
++  case xteDifferential: xmode = "D"; break;
++  case xteEstimated: xmode = "E"; break;
++  case xteManualInput: xmode = "M"; break;
++  case xteSimulator: xmode = "S"; break;
++  default: xmode = "A"; break;
++  }
++  if ( !NMEA0183Msg.AddStrField(stat) ) return false;
++  if ( !NMEA0183Msg.AddStrField(stat) ) return false;
++  if ( !!NMEA0183Msg.AddDoubleField(xte,1.0/nmTom, tNMEA0183Msg::DefDoubleFormat,dir) ) return false;
++  if ( !NMEA0183Msg.AddStrField("N") ) return false;
++  if ( !NMEA0183Msg.AddStrField(xmode) ) return false;
++  return true;
++}
++
++//*****************************************************************************
+ // VBW - Dual Ground/Water Speed
+ // $VWVBW,x.x,x.x,A,x.x,x.x,A,x.x,A,x.x,A*hh
+ // Status V=invalid, A=valid
+@@ -591,6 +746,26 @@ bool NMEA0183BuildVTG(char* msg, const c
+ }
+ 
+ //*****************************************************************************
++// RSA - Rudder Sensor Angle
++// $--RSA,x.x,A,x.x,A*hh<CR><LF>
++// Relative measurement of rudder angle without units, "-" = "Bow Turns To Port"
++bool NMEA0183ParseRSA_nc(const tNMEA0183Msg &NMEA0183Msg, double &StbdRudderSensor, double &PortRudderSensor) {
++  bool result=( NMEA0183Msg.FieldCount()>=4 );
++  if ( result ) {
++    StbdRudderSensor=NMEA0183GetDouble(NMEA0183Msg.Field(0),degToRad);
++    PortRudderSensor=NMEA0183GetDouble(NMEA0183Msg.Field(2),degToRad);
++  }
++  return result;
++}
++
++bool NMEA0183SetRSA(tNMEA0183Msg &NMEA0183Msg, double StbdRudderSensor, double PortRudderSensor, const char *Src) {
++  if ( !NMEA0183Msg.Init("RSA",Src) ) return false;
++  if ( !NMEA0183Msg.AddDoubleField(StbdRudderSensor,radToDeg,tNMEA0183Msg::DefDoubleFormat, NMEA0183IsNA(StbdRudderSensor) ? "V" : "A") ) return false;
++  if ( !NMEA0183Msg.AddDoubleField(PortRudderSensor,radToDeg,tNMEA0183Msg::DefDoubleFormat, NMEA0183IsNA(PortRudderSensor) ? "V" : "A") ) return false;
++  return true;
++}
++
++//*****************************************************************************
+ // $HEROT,4.71,A*1B
+ bool NMEA0183ParseROT_nc(const tNMEA0183Msg &NMEA0183Msg,double &RateOfTurn) {
+   bool result=( NMEA0183Msg.FieldCount()>=2 );
+@@ -608,6 +783,24 @@ bool NMEA0183SetROT(tNMEA0183Msg &NMEA01
+ }
+ 
+ //*****************************************************************************
++// MTW - Water Temperature
++// $--MTW,x.x,C*hh<CR><LF> Temperature, degrees C
++bool NMEA0183ParseMTW_nc(const tNMEA0183Msg &NMEA0183Msg,double &Temp) {
++  bool result=( NMEA0183Msg.FieldCount()>=2 );
++  if ( result ) {
++    Temp = cToKelvin(NMEA0183GetDouble(NMEA0183Msg.Field(0)));
++  }
++
++  return result;
++}
++
++bool NMEA0183SetMTW(tNMEA0183Msg &NMEA0183Msg, double Temp, const char *Src) {
++  if ( !NMEA0183Msg.Init("MTW",Src) ) return false;
++  if ( !NMEA0183Msg.AddDoubleField(kelvinToC(Temp), 1.0, tNMEA0183Msg::DefDoubleFormat,"C") ) return false;
++  return true;
++}
++
++//*****************************************************************************
+ // $HEHDT,244.71,T*1B
+ bool NMEA0183ParseHDT_nc(const tNMEA0183Msg &NMEA0183Msg,double &TrueHeading) {
+   bool result=( NMEA0183Msg.FieldCount()>=2 );
+@@ -952,23 +1145,6 @@ bool NMEA0183SetGSV(tNMEA0183Msg &NMEA01
+ 	return true; 
+ }
+ 	  
+-//*****************************************************************************
+-// $GPZDA,160012.71,11,03,2004,-1,00*7D
+-bool NMEA0183ParseZDA(const tNMEA0183Msg &NMEA0183Msg, double &GPSTime, int &GPSDay, int &GPSMonth, int &GPSYear,
+-                      int &LZD, int &LZMD) {
+-  bool result=( NMEA0183Msg.FieldCount()>=6 );
+-
+-  if ( result ) {
+-    GPSTime=NMEA0183GPTimeToSeconds(NMEA0183Msg.Field(0));
+-    GPSDay=atoi(NMEA0183Msg.Field(1));
+-    GPSMonth=atoi(NMEA0183Msg.Field(2));
+-    GPSYear=atoi(NMEA0183Msg.Field(3));
+-    LZD=atoi(NMEA0183Msg.Field(4));
+-    LZMD=atoi(NMEA0183Msg.Field(5));
+-  }
+-
+-  return result;
+-}
+ 
+ 	  
+ 	  
+Index: nmea0183/NMEA0183Messages.h
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.h
++++ nmea0183/NMEA0183Messages.h
+@@ -275,6 +275,208 @@ bool NMEA0183SetVTG(tNMEA0183Msg &NMEA01
+ // This is obsolet. Use NMEA0183SetVTG
+ bool NMEA0183BuildVTG(char* msg, const char Src[], double TrueCOG, double MagneticCOG, double SOG);
+ 
++
++//*****************************************************************************
++// XDR - Transducer Measurements
++// Transducer		TypeField	UnitsField		Comments
++// temperature 		C 		C = degrees Celsius
++// angular displacement A 		D = degrees 		"-" = anti-clockwise
++// linear displacement 	D 		M = meters 		"-" = compression
++// frequency 		F 		H = Hertz
++// force 		N 		N = Newton 		"-" = compression
++// pressure 		P 		B = Bars, P = Pascal 	"-" = vacuum
++// flow rate 		R 		l = liters/second
++// tachometer 		T 		R = RPM
++// humidity 		H 		P = Percent
++// volume 		V 		M = cubic meters
++// generic 		G 		none (null) 		x.x = variable data
++// current 		I 		A = Amperes
++// voltage 		U 		V = Volts
++// switch or valve 	S 		none (null) 		1 = ON/ CLOSED, 0 = OFF/ OPEN
++// salinity 		L 		S = ppt 		ppt = parts per thousand
++//
++// from https://www.airmartechnology.com/uploads/installguide/PB100TechnicalManual_rev1.007.pdf
++// WIXDR
++// Transduce ID
++// WCHR (ID indicating relative wind chill)
++// <1> C = Temperature
++// <2> Calculated "relative" wind chill temperature, degrees Celsius, to the nearest 0.1 degree
++// <3> C = degrees C
++// <4> WCHR (ID indicating relative wind chill)
++// WCHT (ID indicating theoretical wind chill)
++// <1> C = temperature
++// <2> Calculated "theoretical" wind chill temperature, degrees Celsius, to the nearest 0.1 degree
++// <3> C = degrees C
++// <4> WCHT (ID indicating theoretical wind chill)
++// HINX (ID indicating heat index)
++// <1> C = temperature
++// <2> Calculated heat index, degrees Celsius, to the nearest 0.1 degree
++// <3> C = degrees C
++// <4> HINX (ID indicating heat index)
++// STNP (ID indicating station pressure)
++// <1> P = pressure
++// <2> Actual measured barometric pressure, or "station pressure", bars, to thenearest 0.001 bar
++// <3> B = bars
++// STNP (ID indicating station pressure)
++//
++// YXXDR
++// PTCH (ID indicating pitch of vessel)
++// <1> A = angular displacement
++// <2> Pitch: oscillation of vessel about its latitudinal axis. Bow moving up is positive. Value reported to the nearest 0.1 degree.
++// <3> D = degrees
++// <4> PTCH (ID indicating pitch of vessel)
++// ROLL (ID indicating roll of vessel)
++// <1> A = angular displacement
++// <2> Roll: oscillation of vessel about its longitudinal axis. Roll to thestarboard is positive. Value reported to the nearest 0.1 degree.
++// <3> D = degrees
++// <4> ROLL (ID indicating roll of vessel)
++//
++// from https://productimageserver.com/literature/ownersManual/31741OM.pdf
++// YXXDR
++// "ENV_WATER_T" - Water Temperature
++// <1> C
++// <2> Water Temperature
++// <3> C
++// <4> ENV_WATER_T
++// "ENV_OUTAIR_T" - Outside Ambient Air Temp.
++// <1> C
++// <2> Outside Ambient Air Temp.
++// <3> C
++// <4> "ENV_OUTAIR_T"
++// "ENV_ATMOS_P" - Atmospheric Pressure
++// <1> P
++// <2> Atmospheric Pressure
++// <3> P
++// <4> "ENV_ATMOS_P"
++//
++// "FUEL","FRESHWATER","WASTEWATER","LIVEWELL","OIL",or "BLACKWATER" - PGN 127505
++// <1> V
++// <2> Amount of Fluid (liters)
++// <3> M
++// <4> "FUEL","FRESHWATER","WASTEWATER","LIVEWELL","OIL",or "BLACKWATER"
++//
++// BATVOLT  - PGN 17508
++// <1> U
++// <2> Battery Potential
++// <3> V
++// <4> BATVOLTxxx
++// BATCURR
++// <1> I
++// <2> Battery Current
++// <3> A
++// <4> BATCURRxxx
++// BATTEMP
++// <1> C
++// <2> Battery Case Temp
++// <3> C
++// <4> BATTEMPxxx
++//
++// Sea Temperature, Outside Temperature, Inside Temperature, Engine Room Temperature, orMain Cabin Temperature, depending on the contents of the 130311 PGN
++//  "ENV_SEA_T", "ENV_OUTSIDE_T", "ENV_INSIDE_T", "ENV_EROOM_T", or "ENV_MCABIN_T", depending on the contents of the 130311 PGN.
++// <1> C
++// <2> temp
++// <3> C
++// <4> see above
++//
++// "ENV_ATMOS_P"
++// Inside Humidity or Outside Humidity, depending on the contents of the 130311 PGN.
++// Transmitted as "ENV_INSIDE_H" or "ENV_OUTSIDE_H" depending on the contents of the 130311 PGN
++// <1> H
++// <2> Humidity in percent
++// <3> P
++// <4> see above
++//
++// from YacthDevices data dump
++// $YDXDR,P,98090,P,Baro*55
++//
++// $IIXDR From https://opencpn.org/wiki/dokuwiki/doku.php?id=opencpn:opencpn_user_manual:advanced_features:nmea_sentences XDR
++// Barometer
++// <1> P
++// <2> measured data
++// <3> - bar
++// <4> "Barometer"
++// Air Temperature
++// <1> C
++// <2> degrees 2 decimal plaves
++// <3> C
++// <4> "TempAir" or "ENV_OUTAIR_T"
++// Pitch
++// <1> A
++// <2> pitch in degrees - nose down + nose up
++// <3> D
++// <4> "PTCH" or "PITCH"
++// Roll
++// <1> A
++// <2> roll in degrees - L (port) + R (stbd)
++// <3> D
++// <4> ROLL
++// Water Temp
++// <1> C
++// <2> temp to 2 decimal plaves
++// <3> C
++// <4> "ENV_WATER_T"
++
++struct xdr_t {
++  char TransducerType[2];
++  double data; // in SI units
++  char UnitOfMeasure[2];
++  char TransducerID[255];
++};
++
++bool NMEA0183ParseXDR_nc(const tNMEA0183Msg &NMEA0183Msg, xdr_t *xdr, size_t &n);
++
++inline bool NMEA0183ParseXDR(const tNMEA0183Msg &NMEA0183Msg, xdr_t *xdr, size_t &n) {
++  return (NMEA0183Msg.IsMessageCode("XDR")
++	  ? NMEA0183ParseXDR_nc(NMEA0183Msg, xdr, n)
++	  : false);
++}
++
++// XDR supports up to 4 groupings of 4 fields as defined above.  We just support one grouping of 4 for now.
++bool NMEA0183SetXDR(tNMEA0183Msg &NMEA0183Msg, xdr_t *xdr, size_t n, const char *Src="II");
++
++inline bool NMEA0183SetPressureXDR(tNMEA0183Msg &NMEA0183Msg, double data) {
++  xdr_t xdr[] = { {"P", data, "P", "Baro"}, {"P", data, "P", "ENV_ATMOS_P"}, {"P", data, "B", "Barometer"} };
++  return NMEA0183SetXDR(NMEA0183Msg, xdr, sizeof(xdr)/sizeof(xdr_t));
++}
++inline bool NMEA0183SetRollXDR(tNMEA0183Msg &NMEA0183Msg, double data) {
++  xdr_t xdr = {"A", data, "D", "ROLL"};
++  return NMEA0183SetXDR(NMEA0183Msg, &xdr, sizeof(xdr)/sizeof(xdr_t));
++}
++inline bool NMEA0183SetPitchXDR(tNMEA0183Msg &NMEA0183Msg, double data) {
++  xdr_t xdr = {"A", data, "D", "PTCH"};
++  return NMEA0183SetXDR(NMEA0183Msg, &xdr, sizeof(xdr)/sizeof(xdr_t));
++}
++inline bool NMEA0183SetWaterTempXDR(tNMEA0183Msg &NMEA0183Msg, double data) {
++  xdr_t xdr = {"C", data, "C", "ENV_WATER_T"};
++  return NMEA0183SetXDR(NMEA0183Msg, &xdr, sizeof(xdr)/sizeof(xdr_t));
++}
++inline bool NMEA0183SetPitchRollXDR(tNMEA0183Msg &NMEA0183Msg, double pitch, double roll) {
++  xdr_t xdr[] = { {"A", pitch, "D", "PTCH"}, {"A", roll, "D", "ROLL"} };
++  return NMEA0183SetXDR(NMEA0183Msg, xdr, sizeof(xdr)/sizeof(xdr_t));
++}
++
++//*****************************************************************************
++// $--XTE,A,A,x.x,a,N,a*hh
++// - steer left, + right to get back to track.
++
++enum xteMode_t {
++		xteAutonomous = 0,
++		xteDifferential,
++		xteEstimated,
++		xteManualInput,
++		xteSimulator
++};
++
++bool NMEA0183ParseXTE_nc(const tNMEA0183Msg &NMEA0183Msg, double &xte, xteMode_t &mode);
++
++inline bool NMEA0183ParseXTE(const tNMEA0183Msg &NMEA0183Msg, double &xte, xteMode_t &mode) {
++  return(NMEA0183Msg.IsMessageCode("XTE")
++	 ?NMEA0183ParseXTE_nc(NMEA0183Msg, xte, mode)
++	 :false);
++}
++
++bool NMEA0183SetXTE(tNMEA0183Msg &NMEA0183Msg, double xte, xteMode_t mode = xteAutonomous, const char *Src="GP");
++
+ //*****************************************************************************
+ // VBW - Dual Ground/Water Speed
+ // Speeds returned in ms
+@@ -330,6 +532,19 @@ inline bool NMEA0183ParseVHW(const tNMEA
+ bool NMEA0183SetVHW(tNMEA0183Msg &NMEA0183Msg, double TrueHeading, double MagneticHeading, double SOW, const char *Src="VW");
+ 
+ //*****************************************************************************
++// *RSA - Rudder Sensor Angle
++bool NMEA0183ParseRSA_nc(const tNMEA0183Msg &NMEA0183Msg, double &StbdRudderSensor, double &PortRudderSensor);
++
++inline bool NMEA0183ParseRSA(const tNMEA0183Msg &NMEA0183Msg, double &StbdRudderSensor, double &PortRudderSensor) {
++  return (NMEA0183Msg.IsMessageCode("RSA")
++	  ?NMEA0183ParseRSA_nc(NMEA0183Msg, StbdRudderSensor, PortRudderSensor)
++	  :false);
++}
++
++bool NMEA0183SetRSA(tNMEA0183Msg &NMEA0183Msg, double StbdRudderSensor, double PortRudderSensor=NMEA0183DoubleNA, const char *Src="GP");
++
++
++//*****************************************************************************
+ // Rate of turn will be returned be in radians
+ bool NMEA0183ParseROT_nc(const tNMEA0183Msg &NMEA0183Msg,double &RateOfTurn);
+ 
+@@ -342,6 +557,50 @@ inline bool NMEA0183ParseROT(const tNMEA
+ bool NMEA0183SetROT(tNMEA0183Msg &NMEA0183Msg, double RateOfTurn, const char *Src="GP");
+ 
+ //*****************************************************************************
++// MTW - Water Temperature
++// $--MTW,x.x,C*hh<CR><LF> Temperature, degrees C
++bool NMEA0183ParseMTW_nc(const tNMEA0183Msg &NMEA0183Msg,double &Temp);
++
++inline bool NMEA0183ParseMTW(const tNMEA0183Msg &NMEA0183Msg, double &Temp) {
++  return (NMEA0183Msg.IsMessageCode("MTW")
++            ?NMEA0183ParseMTW_nc(NMEA0183Msg,Temp)
++            :false);
++}
++
++bool NMEA0183SetMTW(tNMEA0183Msg &NMEA0183Msg, double Temp, const char *Src="II");
++
++//*****************************************************************************
++// ZDA - Time & Date - UTC, day, month, year and local time zone.
++// $--ZDA,hhmmss.ss,xx,xx,xxxx,xx,xx*hh<CR><LF>
++// utc - utc time in seconds
++// tz - timezone offset in seconds
++bool NMEA0183ParseZDA_nc(const tNMEA0183Msg &NMEA0183Msg,time_t &utc, time_t &tz);
++
++inline bool NMEA0183ParseZDA(const tNMEA0183Msg &NMEA0183Msg, time_t &utc, time_t &tz) {
++  return (NMEA0183Msg.IsMessageCode("ZDA")
++	  ?NMEA0183ParseZDA_nc(NMEA0183Msg,utc, tz)
++	  :false);
++}
++
++bool NMEA0183ParseZDA_nc(const tNMEA0183Msg &NMEA0183Msg, double &GPSTime, int &GPSDay,
++					int &GPSMonth, int &GPSYear, int &LZD, int &LZMD);
++
++inline bool NMEA0183ParseZDA(const tNMEA0183Msg &NMEA0183Msg, double &GPSTime, int &GPSDay,
++			     int &GPSMonth, int &GPSYear, int &LZD, int &LZMD) {
++  return (NMEA0183Msg.IsMessageCode("ZDA")
++	  ?NMEA0183ParseZDA_nc(NMEA0183Msg, GPSTime, GPSDay, GPSMonth, GPSYear, LZD, LZMD)
++	  :false);
++}
++
++inline bool NMEA0183ParseZDA(const tNMEA0183Msg &NMEA0183Msg, tZDA &zda) {
++
++	return NMEA0183ParseZDA(NMEA0183Msg, zda.GPSTime, zda.GPSDay, zda.GPSMonth, zda.GPSYear, zda.LZD, zda.LZMD);
++}
++
++bool NMEA0183SetZDA(tNMEA0183Msg &NMEA0183Msg, time_t utc, time_t tz, const char *Src="II");
++
++
++//*****************************************************************************
+ // Heading will be returned be in radians
+ bool NMEA0183ParseHDT_nc(const tNMEA0183Msg &NMEA0183Msg,double &TrueHeading);
+ 
+@@ -472,15 +731,5 @@ bool NMEA0183SetGSV(tNMEA0183Msg &NMEA01
+ 					uint32_t PRN4, uint32_t Elevation4, uint32_t Azimuth4, uint32_t SNR4,
+ 					const char *Src="GP");
+ 
+-//*****************************************************************************
+-// ZDA - Time & Date
+-bool NMEA0183ParseZDA(const tNMEA0183Msg &NMEA0183Msg, double &GPSTime, int &GPSDay,
+-					int &GPSMonth, int &GPSYear, int &LZD, int &LZMD);
+-
+-inline bool NMEA0183ParseZDA(const tNMEA0183Msg &NMEA0183Msg, tZDA &zda) {
+-
+-	return NMEA0183ParseZDA(NMEA0183Msg, zda.GPSTime, zda.GPSDay, zda.GPSMonth, zda.GPSYear, zda.LZD, zda.LZMD);
+-}
+-
+ 
+ #endif

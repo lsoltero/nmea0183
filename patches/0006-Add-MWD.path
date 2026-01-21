@@ -1,0 +1,59 @@
+Index: nmea0183/NMEA0183Messages.cpp
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.cpp
++++ nmea0183/NMEA0183Messages.cpp
+@@ -831,6 +831,30 @@ bool NMEA0183SetMWV(tNMEA0183Msg &NMEA01
+   return true;
+ }
+ 
++bool NMEA0183ParseMWD_nc(const tNMEA0183Msg &NMEA0183Msg,double &trueWindDir, double &magWindDir, double &WindSpeed) {
++  bool result=( NMEA0183Msg.FieldCount()>=3 );
++
++  if ( result ) {
++    trueWindDir=atof(NMEA0183Msg.Field(0))*degToRad;
++    magWindDir=atof(NMEA0183Msg.Field(2))*degToRad;
++    WindSpeed=atof(NMEA0183Msg.Field(4))*knToms;
++  }
++  return result;
++}
++
++bool NMEA0183SetMWD(tNMEA0183Msg &NMEA0183Msg, double trueWindDir, double magWindDir, double WindSpeed, const char *Src) {
++  if ( !NMEA0183Msg.Init("MWD",Src) ) return false;
++  if ( !NMEA0183Msg.AddDoubleField(trueWindDir,radToDeg) ) return false;
++  if ( !NMEA0183Msg.AddStrField("T") ) return false;
++  if ( !NMEA0183Msg.AddDoubleField(magWindDir,radToDeg) ) return false;
++  if ( !NMEA0183Msg.AddStrField("M") ) return false;
++  if ( !NMEA0183Msg.AddDoubleField(WindSpeed,msTokn) ) return false;
++  if ( !NMEA0183Msg.AddStrField("N") ) return false;
++  if ( !NMEA0183Msg.AddDoubleField(WindSpeed) ) return false;
++  if ( !NMEA0183Msg.AddStrField("M") ) return false;
++  return true;
++}
++
+ //*****************************************************************************
+ // GSV - GPS sattellites in view
+ //$GPGSV,2,1,08,01,40,083,46,02,17,308,41,12,07,344,39,14,22,228,45*75
+Index: nmea0183/NMEA0183Messages.h
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.h
++++ nmea0183/NMEA0183Messages.h
+@@ -409,6 +409,19 @@ inline bool NMEA0183ParseMWV(const tNMEA
+ }
+ 
+ bool NMEA0183SetMWV(tNMEA0183Msg &NMEA0183Msg, double WindAngle, tNMEA0183WindReference Reference, double WindSpeed, const char *Src="II");
++
++//*****************************************************************************
++// MWD - Wind Direction and Speed
++bool NMEA0183ParseMWD_nc(const tNMEA0183Msg &NMEA0183Msg,double &trueWindDir, double magWindDir, double &WindSpeed);
++
++inline bool NMEA0183ParseMWD(const tNMEA0183Msg &NMEA0183Msg,double &trueWindAngle, double &magWindDir, double &WindSpeed) {
++  return (NMEA0183Msg.IsMessageCode("MWD")
++            ?NMEA0183ParseMWD_nc(NMEA0183Msg,trueWindAngle,magWindDir,WindSpeed)
++            :false);
++}
++
++bool NMEA0183SetMWD(tNMEA0183Msg &NMEA0183Msg, double trueWindDir, double magWindDir, double WindSpeed, const char *Src="II");
++
+ //*****************************************************************************
+ // GSV - GPS Satellites in view
+ bool NMEA0183SetGSV(tNMEA0183Msg &NMEA0183Msg, uint32_t totalMSG, uint32_t thisMSG, uint32_t SatelliteCount, 

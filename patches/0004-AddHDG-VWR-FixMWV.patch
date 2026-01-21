@@ -1,0 +1,116 @@
+Index: nmea0183/NMEA0183Messages.h
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.h
++++ nmea0183/NMEA0183Messages.h
+@@ -321,6 +321,14 @@ inline bool NMEA0183ParseHDM(const tNMEA
+ bool NMEA0183SetHDM(tNMEA0183Msg &NMEA0183Msg, double Heading, const char *Src="GP");
+ 
+ //*****************************************************************************
++bool NMEA0183ParseHDG_nc(const tNMEA0183Msg &NMEA0183Msg,double &Heading, double &Deviation, double &Variation);
++
++inline bool NMEA0183ParseHDG(const tNMEA0183Msg &NMEA0183Msg, double &Heading, double &Deviation, double &Variation) {
++  return (NMEA0183Msg.IsMessageCode("HDG")
++            ?NMEA0183ParseHDG_nc(NMEA0183Msg,Heading,Deviation,Variation)
++            :false);
++}
++
+ bool NMEA0183SetHDG(tNMEA0183Msg &NMEA0183Msg, double Heading, double Deviation, double Variation, const char *Src="GP");
+ 
+ //*****************************************************************************
+@@ -373,6 +381,20 @@ inline bool NMEA0183ParseBOD(const tNMEA
+ }
+ 
+ //*****************************************************************************
++// VWR - Relative Wind Speed and Angle
++// WindAngle in radians 0<->2PI
++// WindSpeed in radians
++bool NMEA0183ParseVWR_nc(const tNMEA0183Msg &NMEA0183Msg,double &WindAngle, double &WindSpeed);
++
++inline bool NMEA0183ParseVWR(const tNMEA0183Msg &NMEA0183Msg,double &WindAngle, double &WindSpeed) {
++  return (NMEA0183Msg.IsMessageCode("VWR")
++            ?NMEA0183ParseVWR_nc(NMEA0183Msg,WindAngle,WindSpeed)
++            :false);
++}
++
++bool NMEA0183SetVWR(tNMEA0183Msg &NMEA0183Msg, double WindAngle, double WindSpeed, const char *Src="GP");
++
++//*****************************************************************************
+ // MWV - Wind Speed and Angle
+ bool NMEA0183ParseMWV_nc(const tNMEA0183Msg &NMEA0183Msg,double &WindAngle, tNMEA0183WindReference &Reference, double &WindSpeed);
+ 
+Index: nmea0183/NMEA0183Messages.cpp
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.cpp
++++ nmea0183/NMEA0183Messages.cpp
+@@ -579,6 +579,18 @@ bool NMEA0183SetHDM(tNMEA0183Msg &NMEA01
+ }
+ 
+ //*****************************************************************************
++//*****************************************************************************
++bool NMEA0183ParseHDG_nc(const tNMEA0183Msg &NMEA0183Msg,double &Heading, double &Deviation, double &Variation) {
++    bool result=(NMEA0183Msg.FieldCount() >= 5);
++    if ( result ) {
++        Heading=atof(NMEA0183Msg.Field(0))*degToRad;
++        Deviation=atof(NMEA0183Msg.Field(1))*degToRad; if (NMEA0183Msg.Field(2)[0]=='W') Deviation=-Deviation;  
++        Variation=atof(NMEA0183Msg.Field(3))*degToRad; if (NMEA0183Msg.Field(4)[0]=='W') Variation=-Variation; 
++    }
++
++    return result;
++}
++
+ bool NMEA0183SetHDG(tNMEA0183Msg &NMEA0183Msg, double Heading, double Deviation, double Variation, const char *Src) {
+   if ( !NMEA0183Msg.Init("HDG",Src) ) return false;
+   if ( !NMEA0183Msg.AddDoubleField(Heading,radToDeg) ) return false;
+@@ -756,13 +768,42 @@ bool NMEA0183ParseBOD_nc(const tNMEA0183
+ }
+ 
+ //*****************************************************************************
++// VWR - Wind Speed and Angle
++//$IIVWR,x.x,a,x.x,N,x.x,M,x.x,K*hh
++bool NMEA0183ParseVWR_nc(const tNMEA0183Msg &NMEA0183Msg,double &WindAngle, double &WindSpeed) {
++  bool result=( NMEA0183Msg.FieldCount()>=8 );
++  if ( result ) {
++      WindAngle=atof(NMEA0183Msg.Field(0))*degToRad;
++      if ( NMEA0183Msg.Field(1)[0] == 'L') WindAngle = 2*M_PI-WindAngle;
++      WindSpeed=atof(NMEA0183Msg.Field(4));
++  }
++  
++  return result;
++}
++
++bool NMEA0183SetVWR(tNMEA0183Msg &NMEA0183Msg, double WindAngle, double WindSpeed, const char *Src) {
++  if ( !NMEA0183Msg.Init("VWR",Src) ) return false;
++  bool left = WindAngle > M_PI;
++  if ( left ) WindAngle = 2*M_PI - WindAngle;
++  if ( !NMEA0183Msg.AddDoubleField(WindAngle,radToDeg) ) return false;
++  if ( !NMEA0183Msg.AddStrField(left ? "L" : "R") ) return false;
++  if ( !NMEA0183Msg.AddDoubleField(WindSpeed,msTokn,tNMEA0183Msg::DefDoubleFormat,"N") ) return false;
++  if ( !NMEA0183Msg.AddStrField("N") ) return false;  
++  if ( !NMEA0183Msg.AddDoubleField(WindSpeed) ) return false;
++  if ( !NMEA0183Msg.AddStrField("M") ) return false;  
++  if ( !NMEA0183Msg.AddDoubleField(WindSpeed,msTokmh,tNMEA0183Msg::DefDoubleFormat,"K") ) return false;
++  return true;
++}
++
++
++//*****************************************************************************
+ // MWV - Wind Speed and Angle
+ //$IIMWV,120.1,R,9.5,M,A,a*hh
+ bool NMEA0183ParseMWV_nc(const tNMEA0183Msg &NMEA0183Msg,double &WindAngle, tNMEA0183WindReference &Reference, double &WindSpeed) {
+   bool result=( NMEA0183Msg.FieldCount()>=4 );
+ 
+   if ( result ) {
+-    WindAngle=atof(NMEA0183Msg.Field(0));
++    WindAngle=atof(NMEA0183Msg.Field(0))*degToRad;
+     switch ( NMEA0183Msg.Field(1)[0] ) {
+       case 'T' : Reference=NMEA0183Wind_True; break;
+       case 'R' :
+@@ -782,7 +823,7 @@ bool NMEA0183ParseMWV_nc(const tNMEA0183
+ 
+ bool NMEA0183SetMWV(tNMEA0183Msg &NMEA0183Msg, double WindAngle, tNMEA0183WindReference Reference, double WindSpeed, const char *Src) {
+   if ( !NMEA0183Msg.Init("MWV",Src) ) return false;
+-  if ( !NMEA0183Msg.AddDoubleField(WindAngle) ) return false;
++  if ( !NMEA0183Msg.AddDoubleField(WindAngle,radToDeg) ) return false;
+   if ( !NMEA0183Msg.AddStrField(Reference==NMEA0183Wind_True?"T":"R") ) return false;
+   if ( !NMEA0183Msg.AddDoubleField(WindSpeed) ) return false;
+   if ( !NMEA0183Msg.AddStrField("M") ) return false;

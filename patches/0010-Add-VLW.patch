@@ -1,0 +1,66 @@
+Index: nmea0183/NMEA0183Messages.cpp
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.cpp
++++ nmea0183/NMEA0183Messages.cpp
+@@ -42,6 +42,8 @@ const double msTokn=3600.0/1852.0;
+ const double nmTom=1.852*1000;
+ const double mToFathoms=0.546806649;
+ const double mToFeet=3.2808398950131;
++const double mToN=0.000539957;
++const double nToM=1852;
+ 
+ //*****************************************************************************
+ void NMEA0183AddChecksum(char* msg) {
+@@ -800,6 +802,28 @@ bool NMEA0183SetMTW(tNMEA0183Msg &NMEA01
+   return true;
+ }
+ 
++//*****************************************************************************
++// VLW - Dual Ground/Water Distance.  Only Support total/trip distance through water
++// $VWVLW,2.8,N,2.8,N*4C
++// distances in SI units
++// can ignore the Ground fields since not used
++// https://actisense.com/wp-content/uploads/2020/01/NMEA-0183-Information-sheet-issue-4-1-1.pdf - check note on shortening sentences
++bool NMEA0183ParseVLW_nc(const tNMEA0183Msg &NMEA0183Msg, double &totalDistance, double &tripDistance) {
++  bool result=( NMEA0183Msg.FieldCount()>=4 );
++  if ( result ) {
++    totalDistance = NMEA0183GetDouble(NMEA0183Msg.Field(0),nToM);
++    tripDistance   = NMEA0183GetDouble(NMEA0183Msg.Field(2),nToM);
++  }
++  return result;
++}
++
++bool NMEA0183SetVLW(tNMEA0183Msg &NMEA0183Msg, double totalDistance, double tripDistance, const char *Src) {
++  if ( !NMEA0183Msg.Init("VLW",Src) ) return false;
++  if ( !NMEA0183Msg.AddDoubleField(totalDistance, mToN, tNMEA0183Msg::DefDoubleFormat, "N") ) return false;
++  if ( !NMEA0183Msg.AddDoubleField(tripDistance, mToN, tNMEA0183Msg::DefDoubleFormat, "N") ) return false;
++  return true;
++}
++
+ //*****************************************************************************
+ // $HEHDT,244.71,T*1B
+ bool NMEA0183ParseHDT_nc(const tNMEA0183Msg &NMEA0183Msg,double &TrueHeading) {
+Index: nmea0183/NMEA0183Messages.h
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.h
++++ nmea0183/NMEA0183Messages.h
+@@ -570,6 +570,19 @@ inline bool NMEA0183ParseMTW(const tNMEA
+ bool NMEA0183SetMTW(tNMEA0183Msg &NMEA0183Msg, double Temp, const char *Src="II");
+ 
+ //*****************************************************************************
++// VLW - Dual Ground/Water Distance.  Only Support total/trip distance through water
++// $VWVLW,2.8,N,2.8,N*4C
++// distances in SI units
++bool NMEA0183ParseVLW_nc(const tNMEA0183Msg &NMEA0183Msg, double &totalDistance, double &tripDistance);
++
++inline bool NMEA0183ParseVLW(const tNMEA0183Msg &NMEA0183Msg, double &totalDistance, double &tripDistance) {
++  return (NMEA0183Msg.IsMessageCode("VLW") ?
++	  NMEA0183ParseVLW_nc(NMEA0183Msg, totalDistance, tripDistance) : false);
++}
++
++bool NMEA0183SetVLW(tNMEA0183Msg &NMEA0183Msg, double totalDistance, double tripDistance, const char *Src="VW");
++
++//*****************************************************************************
+ // ZDA - Time & Date - UTC, day, month, year and local time zone.
+ // $--ZDA,hhmmss.ss,xx,xx,xxxx,xx,xx*hh<CR><LF>
+ // utc - utc time in seconds

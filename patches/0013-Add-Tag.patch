@@ -1,0 +1,55 @@
+Index: nmea0183/NMEA0183Msg.cpp
+===================================================================
+--- nmea0183.orig/NMEA0183Msg.cpp
++++ nmea0183/NMEA0183Msg.cpp
+@@ -129,6 +129,18 @@ bool tNMEA0183Msg::AddToBuf(const char *
+   return true;
+ }
+ 
++void tNMEA0183Msg::AddToTag(const char *data)
++{
++  if ( strlen(Tag) ) strcat(Tag,",");
++  strcat(Tag,data);
++}
++
++const char * tNMEA0183Msg::GetTag() const
++{
++  if ( strlen(Tag) == 0 ) return NULL;
++  return (const char *)Tag;
++}
++
+ //*****************************************************************************
+ bool tNMEA0183Msg::GetMessage(char *MsgData, size_t BufSize) const {
+   if ( MsgData==0 || BufSize<14 ) return false;
+@@ -350,6 +362,8 @@ void tNMEA0183Msg::Clear() {
+   _MessageTime=0;
+   CheckSum=0;
+   Prefix=' ';
++
++  Tag[0] = 0;
+ }
+ 
+ //*****************************************************************************
+Index: nmea0183/NMEA0183Msg.h
+===================================================================
+--- nmea0183.orig/NMEA0183Msg.h
++++ nmea0183/NMEA0183Msg.h
+@@ -65,6 +65,7 @@ class tNMEA0183Msg
+     uint8_t _FieldCount;
+     uint8_t CheckSum;
+ 
++    char Tag[MAX_NMEA0183_MSG_LEN];
+ 
+ // Helper functions on converting TimeLib.h to time.h
+   protected:
+@@ -114,6 +115,10 @@ class tNMEA0183Msg
+     bool SetMessage(const char *buf);
+     // Get message as complete NMEA0183 format string to buffer.
+     bool GetMessage(char *MsgData, size_t BufSize) const;
++  
++    const char *GetTag() const;
++    void AddToTag(const char *data);
++
+     // Clear message
+     void Clear();
+     // Print message fields

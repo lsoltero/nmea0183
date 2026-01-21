@@ -1,0 +1,91 @@
+Index: nmea0183/NMEA0183Messages.cpp
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.cpp
++++ nmea0183/NMEA0183Messages.cpp
+@@ -188,15 +188,51 @@ bool NMEA0183SetDBx(tNMEA0183Msg &NMEA01
+ }
+ 
+ //*****************************************************************************
+-// $IIDPT,10.5,0.9*hh
+-bool NMEA0183SetDPT(tNMEA0183Msg &NMEA0183Msg, double DepthBelowTransducer, double Offset, const char *Src) {
++// $IIDPT,10.5,0.9*hh       - before NMEA0183 v3.0
++// $IIDPT,10.5,0.9,100*hh   - starting with NMEA0183 v3.0
++//
++
++//expecting NMEA0183 3.0. It includes Range field (must handle value/empty field/no field)
++bool NMEA0183ParseDPT_nc(const tNMEA0183Msg &NMEA0183Msg,  double &DepthBelowTransducer, double &Offset, double &Range ) {
++	bool result=( NMEA0183Msg.FieldCount()>= 2);
++	if ( result ) {
++		DepthBelowTransducer=NMEA0183GetDouble(NMEA0183Msg.Field(0));
++		Offset=NMEA0183GetDouble(NMEA0183Msg.Field(1));
++		Range=NMEA0183DoubleNA;
++		if ( NMEA0183Msg.FieldCount()>2  ) {
++			Range=NMEA0183GetDouble(NMEA0183Msg.Field(2));
++		}		
++	}
++	return result;
++}
++
++//expecting NMEA0183 before 3.0. it did not include Range field,  ignore it
++bool NMEA0183ParseDPT_nc(const tNMEA0183Msg &NMEA0183Msg,  double &DepthBelowTransducer, double &Offset ) {
++	bool result=( NMEA0183Msg.FieldCount()>= 2);
++	if ( result ) {
++		DepthBelowTransducer=NMEA0183GetDouble(NMEA0183Msg.Field(0));
++		Offset=NMEA0183GetDouble(NMEA0183Msg.Field(1));
++	}
++	return result;
++}
++
++bool NMEA0183SetDPT(tNMEA0183Msg &NMEA0183Msg, double DepthBelowTransducer, double Offset, double Range, const char *Src, const char *DepthFormat) {
+   if ( !NMEA0183Msg.Init("DPT",Src) ) return false;
+-  if ( !NMEA0183Msg.AddDoubleField(DepthBelowTransducer) ) return false;
+-  if ( !NMEA0183Msg.AddDoubleField(Offset) ) return false;
++  if ( !NMEA0183Msg.AddDoubleField(DepthBelowTransducer, 1, DepthFormat) ) return false;
++  if ( !NMEA0183Msg.AddDoubleField(Offset, 1, DepthFormat) ) return false;
++  if ( !NMEA0183Msg.AddDoubleField(Range, 1, "%.0f" ) ) return false;  
++  return true;
++}
++
++bool NMEA0183SetDPT(tNMEA0183Msg &NMEA0183Msg, double DepthBelowTransducer, double Offset, const char *Src, const char *DepthFormat) {
++  if ( !NMEA0183Msg.Init("DPT",Src) ) return false;
++  if ( !NMEA0183Msg.AddDoubleField(DepthBelowTransducer, 1, DepthFormat) ) return false;
++  if ( !NMEA0183Msg.AddDoubleField(Offset, 1, DepthFormat) ) return false;
+ 
+   return true;
+ }
+ 
++
+ //*****************************************************************************
+ // $GPGGA,182435.00,6023.20859,N,02219.99442,E,2,10,0.9,4.0,M,20.6,M,5.0,0120*4D
+ bool NMEA0183ParseGGA_nc(const tNMEA0183Msg &NMEA0183Msg, double &GPSTime, double &Latitude, double &Longitude,
+Index: nmea0183/NMEA0183Messages.h
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.h
++++ nmea0183/NMEA0183Messages.h
+@@ -208,9 +208,24 @@ bool NMEA0183SetDBT(tNMEA0183Msg &NMEA01
+ // Set message to DBK/DBS/DBT automatically according to Offset
+ bool NMEA0183SetDBx(tNMEA0183Msg &NMEA0183Msg, double DepthBelowTransducer, double Offset, const char *Src="II");
+ 
+-
+ //*****************************************************************************
+-bool NMEA0183SetDPT(tNMEA0183Msg &NMEA0183Msg, double DepthBelowTransducer, double Offset, const char *Src="II");
++bool NMEA0183ParseDPT_nc(const tNMEA0183Msg &NMEA0183Msg,  double &DepthBelowTransducer, double &Offset, double &Range );
++inline bool NMEA0183ParseDPT(const tNMEA0183Msg &NMEA0183Msg,  double &DepthBelowTransducer, double &Offset, double &Range ) {
++  return (NMEA0183Msg.IsMessageCode("DPT")
++            ?NMEA0183ParseDPT_nc(NMEA0183Msg,DepthBelowTransducer, Offset, Range )
++            :false);
++}
++
++bool NMEA0183ParseDPT_nc(const tNMEA0183Msg &NMEA0183Msg,  double &DepthBelowTransducer, double &Offset );
++inline bool NMEA0183ParseDPT(const tNMEA0183Msg &NMEA0183Msg,  double &DepthBelowTransducer, double &Offset ) {
++  return (NMEA0183Msg.IsMessageCode("DPT")
++            ?NMEA0183ParseDPT_nc(NMEA0183Msg,DepthBelowTransducer, Offset )
++            :false);
++}
++
++bool NMEA0183SetDPT(tNMEA0183Msg &NMEA0183Msg, double DepthBelowTransducer, double Offset, double Range, const char *Src="II", const char *DepthFormat=tNMEA0183Msg::DefDoubleFormat);
++
++bool NMEA0183SetDPT(tNMEA0183Msg &NMEA0183Msg, double DepthBelowTransducer, double Offset, const char *Src="II", const char *DepthFormat=tNMEA0183Msg::DefDoubleFormat);
+ 
+ 
+ //*****************************************************************************

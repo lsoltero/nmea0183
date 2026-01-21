@@ -1,0 +1,304 @@
+Index: nmea0183/NMEA0183Messages.cpp
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.cpp
++++ nmea0183/NMEA0183Messages.cpp
+@@ -1180,6 +1180,215 @@ bool NMEA0183ParseBOD_nc(const tNMEA0183
+     return result;
+ }
+ 
++// ---------- local helper ----------
++static inline void copyWpId(char *dst, size_t dstsz, const char *src) {
++  if (!dst || dstsz == 0) return;
++  if (!src) src = "";
++  strncpy(dst, src, dstsz);
++  dst[dstsz - 1] = '\0';
++}
++
++// ---------------------------------------------------------------------------
++// WPL SET (parse already exists in your code)
++// $--WPL,llll.ll,a,yyyyy.yy,a,WAYPOINT*hh
++// Internal SI: lat/lon are decimal degrees as used elsewhere in this file
++// ---------------------------------------------------------------------------
++bool NMEA0183SetWPL(tNMEA0183Msg &NMEA0183Msg, const tWPL &wpl, const char *Src) {
++  if ( !NMEA0183Msg.Init("WPL", Src) ) return false;
++  if ( !NMEA0183Msg.AddLatitudeField(wpl.latitude) ) return false;
++  if ( !NMEA0183Msg.AddLongitudeField(wpl.longitude) ) return false;
++  if ( !NMEA0183Msg.AddStrField(wpl.name) ) return false;
++  return true;
++}
++
++// ---------------------------------------------------------------------------
++// BOD SET (parse already exists in your code)
++// $--BOD,ttt.t,T,mmm.m,M,DEST,ORIG*hh
++// Internal SI: bearings are radians
++// ---------------------------------------------------------------------------
++bool NMEA0183SetBOD(tNMEA0183Msg &NMEA0183Msg, const tBOD &bod, const char *Src) {
++  if ( !NMEA0183Msg.Init("BOD", Src) ) return false;
++
++  // True bearing + 'T'
++  if ( NMEA0183IsNA(bod.trueBearing) ) {
++    if ( !NMEA0183Msg.AddEmptyField() ) return false;
++    if ( !NMEA0183Msg.AddEmptyField() ) return false;
++  } else {
++    if ( !NMEA0183Msg.AddDoubleField(bod.trueBearing, radToDeg) ) return false;
++    if ( !NMEA0183Msg.AddStrField("T") ) return false;
++  }
++
++  // Magnetic bearing + 'M'
++  if ( NMEA0183IsNA(bod.magBearing) ) {
++    if ( !NMEA0183Msg.AddEmptyField() ) return false;
++    if ( !NMEA0183Msg.AddEmptyField() ) return false;
++  } else {
++    if ( !NMEA0183Msg.AddDoubleField(bod.magBearing, radToDeg) ) return false;
++    if ( !NMEA0183Msg.AddStrField("M") ) return false;
++  }
++
++  if ( !NMEA0183Msg.AddStrField(bod.destID) ) return false;
++  if ( !NMEA0183Msg.AddStrField(bod.originID) ) return false;
++
++  return true;
++}
++
++// ---------------------------------------------------------------------------
++// BWx PARSE core (BWC/BWR)
++// $--BWC,hhmmss.ss,llll.ll,a,yyyyy.yy,a,ttt.t,T,mmm.m,M,ddd.d,N,WAYPOINT,mode*hh
++// $--BWR, ... same field layout ...
++// Internal SI:
++//   GPSTime seconds, bearings radians, distance meters, lat/lon decimal degrees
++// ---------------------------------------------------------------------------
++bool NMEA0183ParseBWx_nc(const tNMEA0183Msg &NMEA0183Msg, tBWC &bwx) {
++  // BWC/BWR commonly have 12 required fields; mode field may be present as 13th.
++  if ( NMEA0183Msg.FieldCount() < 12 ) return false;
++
++  bwx.GPSTime  = NMEA0183GPTimeToSeconds(NMEA0183Msg.Field(0));
++  bwx.latitude = LatLonToDouble(NMEA0183Msg.Field(1), NMEA0183Msg.Field(2)[0]);
++  bwx.longitude= LatLonToDouble(NMEA0183Msg.Field(3), NMEA0183Msg.Field(4)[0]);
++
++  // Fields:
++  // 5: true bearing (deg), 6: 'T'
++  // 7: mag bearing (deg), 8: 'M'
++  // 9: distance (nm), 10: 'N'
++  // 11: waypoint ID
++  bwx.trueBearing = NMEA0183GetDouble(NMEA0183Msg.Field(5), degToRad);
++  bwx.magBearing  = NMEA0183GetDouble(NMEA0183Msg.Field(7), degToRad);
++  bwx.distance    = NMEA0183GetDouble(NMEA0183Msg.Field(9), nmTom); // nm -> meters
++
++  copyWpId(bwx.waypointID, sizeof(bwx.waypointID), NMEA0183Msg.Field(11));
++
++  // Mode indicator optional (field 12 if present)
++  bwx.modeIndicator = '\0';
++  if ( NMEA0183Msg.FieldCount() >= 13 && NMEA0183Msg.FieldLen(12) > 0 ) {
++    bwx.modeIndicator = NMEA0183Msg.Field(12)[0];
++  }
++
++  return true;
++}
++
++bool NMEA0183ParseBWC_nc(const tNMEA0183Msg &NMEA0183Msg, tBWC &bwc) {
++  return (NMEA0183Msg.IsMessageCode("BWC") ? NMEA0183ParseBWx_nc(NMEA0183Msg, bwc) : false);
++}
++
++bool NMEA0183ParseBWR_nc(const tNMEA0183Msg &NMEA0183Msg, tBWC &bwr) {
++  return (NMEA0183Msg.IsMessageCode("BWR") ? NMEA0183ParseBWx_nc(NMEA0183Msg, bwr) : false);
++}
++
++// ---------------------------------------------------------------------------
++// BWx SET core (embedded in SetBWC/SetBWR)
++// Key correction: DO NOT emit the trailing tag fields (T/M/N) if numeric is NA.
++// (i.e., if bearing/distance field is empty/NA, emit empty+empty for value+tag)
++// ---------------------------------------------------------------------------
++static bool SetBWx(tNMEA0183Msg &NMEA0183Msg, const char *code, const tBWC &bwx, const char *Src) {
++  if ( !NMEA0183Msg.Init(code, Src) ) return false;
++
++  if ( !NMEA0183Msg.AddTimeField(bwx.GPSTime) ) return false;
++  if ( !NMEA0183Msg.AddLatitudeField(bwx.latitude) ) return false;
++  if ( !NMEA0183Msg.AddLongitudeField(bwx.longitude) ) return false;
++
++  // True bearing + 'T'
++  if ( NMEA0183IsNA(bwx.trueBearing) ) {
++    if ( !NMEA0183Msg.AddEmptyField() ) return false;
++    if ( !NMEA0183Msg.AddEmptyField() ) return false;
++  } else {
++    if ( !NMEA0183Msg.AddDoubleField(bwx.trueBearing, radToDeg) ) return false;
++    if ( !NMEA0183Msg.AddStrField("T") ) return false;
++  }
++
++  // Magnetic bearing + 'M'
++  if ( NMEA0183IsNA(bwx.magBearing) ) {
++    if ( !NMEA0183Msg.AddEmptyField() ) return false;
++    if ( !NMEA0183Msg.AddEmptyField() ) return false;
++  } else {
++    if ( !NMEA0183Msg.AddDoubleField(bwx.magBearing, radToDeg) ) return false;
++    if ( !NMEA0183Msg.AddStrField("M") ) return false;
++  }
++
++  // Distance (nm) + 'N'
++  if ( NMEA0183IsNA(bwx.distance) ) {
++    if ( !NMEA0183Msg.AddEmptyField() ) return false;
++    if ( !NMEA0183Msg.AddEmptyField() ) return false;
++  } else {
++    if ( !NMEA0183Msg.AddDoubleField(bwx.distance, 1.0/nmTom) ) return false; // meters -> nm
++    if ( !NMEA0183Msg.AddStrField("N") ) return false;
++  }
++
++  if ( !NMEA0183Msg.AddStrField(bwx.waypointID) ) return false;
++
++  // Mode indicator: default to 'A' if unset
++  char mode[2];
++  mode[0] = (bwx.modeIndicator == '\0') ? 'A' : bwx.modeIndicator;
++  mode[1] = '\0';
++  if ( !NMEA0183Msg.AddStrField(mode) ) return false;
++
++  return true;
++}
++
++bool NMEA0183SetBWC(tNMEA0183Msg &NMEA0183Msg, const tBWC &bwc, const char *Src) {
++  return SetBWx(NMEA0183Msg, "BWC", bwc, Src);
++}
++
++bool NMEA0183SetBWR(tNMEA0183Msg &NMEA0183Msg, const tBWC &bwr, const char *Src) {
++  return SetBWx(NMEA0183Msg, "BWR", bwr, Src);
++}
++
++// ---------------------------------------------------------------------------
++// BWW PARSE/SET (minimal, SI bearings in radians)
++// Common layout:
++// $--BWW,ttt.t,T,mmm.m,M,WAYPOINT,mode*hh
++// Mode is optional.
++// ---------------------------------------------------------------------------
++bool NMEA0183ParseBWW_nc(const tNMEA0183Msg &NMEA0183Msg, tBWW &bww) {
++  if ( !NMEA0183Msg.IsMessageCode("BWW") ) return false;
++  if ( NMEA0183Msg.FieldCount() < 6 ) return false;
++
++  bww.trueBearing = NMEA0183GetDouble(NMEA0183Msg.Field(0), degToRad);
++  bww.magBearing  = NMEA0183GetDouble(NMEA0183Msg.Field(2), degToRad);
++
++  copyWpId(bww.waypointID, sizeof(bww.waypointID), NMEA0183Msg.Field(4));
++
++  bww.modeIndicator = '\0';
++  if ( NMEA0183Msg.FieldCount() >= 7 && NMEA0183Msg.FieldLen(6) > 0 ) {
++    bww.modeIndicator = NMEA0183Msg.Field(6)[0];
++  }
++
++  return true;
++}
++
++bool NMEA0183SetBWW(tNMEA0183Msg &NMEA0183Msg, const tBWW &bww, const char *Src) {
++  if ( !NMEA0183Msg.Init("BWW", Src) ) return false;
++
++  // True bearing + 'T' (only if value present)
++  if ( NMEA0183IsNA(bww.trueBearing) ) {
++    if ( !NMEA0183Msg.AddEmptyField() ) return false;
++    if ( !NMEA0183Msg.AddEmptyField() ) return false;
++  } else {
++    if ( !NMEA0183Msg.AddDoubleField(bww.trueBearing, radToDeg) ) return false;
++    if ( !NMEA0183Msg.AddStrField("T") ) return false;
++  }
++
++  // Mag bearing + 'M'
++  if ( NMEA0183IsNA(bww.magBearing) ) {
++    if ( !NMEA0183Msg.AddEmptyField() ) return false;
++    if ( !NMEA0183Msg.AddEmptyField() ) return false;
++  } else {
++    if ( !NMEA0183Msg.AddDoubleField(bww.magBearing, radToDeg) ) return false;
++    if ( !NMEA0183Msg.AddStrField("M") ) return false;
++  }
++
++  if ( !NMEA0183Msg.AddStrField(bww.waypointID) ) return false;
++
++  // Mode indicator optional: if you want to omit entirely when unset, change this.
++  char mode[2];
++  mode[0] = (bww.modeIndicator == '\0') ? 'A' : bww.modeIndicator;
++  mode[1] = '\0';
++  if ( !NMEA0183Msg.AddStrField(mode) ) return false;
++
++  return true;
++}
++
+ //*****************************************************************************
+ // VWR - Wind Speed and Angle
+ //$IIVWR,x.x,a,x.x,N,x.x,M,x.x,K*hh
+Index: nmea0183/NMEA0183Messages.h
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.h
++++ nmea0183/NMEA0183Messages.h
+@@ -142,6 +142,37 @@ struct tBOD {
+   char destID[NMEA0183_MAX_WP_NAME_LENGTH];
+ };
+ 
++// ------------------------------
++// BWC / BWR (Waypoint to waypoint navigation)
++// Internal SI units:
++//   GPSTime: seconds since midnight (same convention as other messages here)
++//   latitude/longitude: decimal degrees
++//   trueBearing/magBearing: radians
++//   distance: meters
++// ------------------------------
++struct tBWC {
++  double GPSTime;
++  double latitude;
++  double longitude;
++  double trueBearing;   // radians
++  double magBearing;    // radians
++  double distance;      // meters
++  char waypointID[NMEA0183_MAX_WP_NAME_LENGTH];
++  char modeIndicator;   // may be '\0' if absent; when setting, default to 'A'
++};
++
++// ------------------------------
++// BWW (Bearing - Waypoint to Waypoint) - minimal support
++// Internal SI units:
++//   trueBearing/magBearing: radians
++// ------------------------------
++struct tBWW {
++  double trueBearing;   // radians
++  double magBearing;    // radians
++  char waypointID[NMEA0183_MAX_WP_NAME_LENGTH];
++  char modeIndicator;   // optional
++};
++
+ struct tZDA {
+ 	// UTC time (hours, minutes, seconds, may have fractional subsecond)
+ 	double GPSTime;
+@@ -740,6 +771,8 @@ inline bool NMEA0183ParseWPL(const tNMEA
+ 					NMEA0183ParseWPL_nc(NMEA0183Msg,wpl) : false);
+ }
+ 
++bool NMEA0183SetWPL(tNMEA0183Msg &NMEA0183Msg, const tWPL &wpl, const char *Src="GP");
++
+ //*****************************************************************************
+ bool NMEA0183ParseBOD_nc(const tNMEA0183Msg &NMEA0183Msg, tBOD &bod);
+ 
+@@ -748,6 +781,32 @@ inline bool NMEA0183ParseBOD(const tNMEA
+ 					NMEA0183ParseBOD_nc(NMEA0183Msg,bod) : false);
+ }
+ 
++bool NMEA0183SetBOD(tNMEA0183Msg &NMEA0183Msg, const tBOD &bod, const char *Src="GP");
++
++// --- Parse helpers for BWC/BWR share a common core ---
++bool NMEA0183ParseBWx_nc(const tNMEA0183Msg &NMEA0183Msg, tBWC &bwx);
++
++bool NMEA0183ParseBWC_nc(const tNMEA0183Msg &NMEA0183Msg, tBWC &bwc);
++inline bool NMEA0183ParseBWC(const tNMEA0183Msg &NMEA0183Msg, tBWC &bwc) {
++  return (NMEA0183Msg.IsMessageCode("BWC") ? NMEA0183ParseBWC_nc(NMEA0183Msg, bwc) : false);
++}
++
++bool NMEA0183SetBWC(tNMEA0183Msg &NMEA0183Msg, const tBWC &bwc, const char *Src="GP");
++
++bool NMEA0183ParseBWR_nc(const tNMEA0183Msg &NMEA0183Msg, tBWC &bwr);
++inline bool NMEA0183ParseBWR(const tNMEA0183Msg &NMEA0183Msg, tBWC &bwr) {
++  return (NMEA0183Msg.IsMessageCode("BWR") ? NMEA0183ParseBWR_nc(NMEA0183Msg, bwr) : false);
++}
++
++bool NMEA0183SetBWR(tNMEA0183Msg &NMEA0183Msg, const tBWC &bwr, const char *Src="GP");
++
++bool NMEA0183ParseBWW_nc(const tNMEA0183Msg &NMEA0183Msg, tBWW &bww);
++inline bool NMEA0183ParseBWW(const tNMEA0183Msg &NMEA0183Msg, tBWW &bww) {
++  return (NMEA0183Msg.IsMessageCode("BWW") ? NMEA0183ParseBWW_nc(NMEA0183Msg, bww) : false);
++}
++
++bool NMEA0183SetBWW(tNMEA0183Msg &NMEA0183Msg, const tBWW &bww, const char *Src="GP");
++
+ //*****************************************************************************
+ // VWR - Relative Wind Speed and Angle
+ // WindAngle in radians 0<->2PI

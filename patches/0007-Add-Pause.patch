@@ -1,0 +1,57 @@
+Index: nmea0183/NMEA0183Stream.cpp
+===================================================================
+--- nmea0183.orig/NMEA0183Stream.cpp
++++ nmea0183/NMEA0183Stream.cpp
+@@ -26,6 +26,7 @@ I/O stream used in the NMEA0183 library.
+ 
+ #include "NMEA0183Stream.h"
+ #include <string.h>
++#include <poll.h>
+ 
+ #ifdef ARDUINO
+ // Arduino uses its own implementation.
+@@ -52,6 +53,14 @@ size_t N2kStream::print(const __FlashStr
+ }
+ #endif
+ 
++void tNMEA0183Stream::Pause(int fd, int msec)
++{
++    struct pollfd pfd[1];
++    pfd[0].fd = fd;
++    pfd[0].events = POLLIN;
++
++    poll(pfd, 1, msec);
++}
+ 
+ size_t tNMEA0183Stream::print(int val, uint8_t radix) {
+ 
+Index: nmea0183/NMEA0183Stream.h
+===================================================================
+--- nmea0183.orig/NMEA0183Stream.h
++++ nmea0183/NMEA0183Stream.h
+@@ -40,7 +40,13 @@ typedef Stream tNMEA0183Stream;
+ // Non Arduino platforms need to implement this themselves if they want to use
+ // functions which operate on streams.
+ class tNMEA0183Stream {
++   protected:
++   void Pause(int fd, int msec);
++
+    public:
++   // Pause for msec milli seconds unless data comes in in the mean time.
++   virtual void Pause(int msec) = 0;
++
+    virtual int available() { return 1; }
+    virtual int availableForWrite() { return 1; }
+    // Returns first byte if incoming data, or -1 on no available data.
+Index: nmea0183/NMEA0183.h
+===================================================================
+--- nmea0183.orig/NMEA0183.h
++++ nmea0183/NMEA0183.h
+@@ -58,6 +58,7 @@ class tNMEA0183
+     tNMEA0183(tNMEA0183Stream *stream=0, uint8_t _SourceID=0);
+     void SetMessageStream(tNMEA0183Stream *stream, uint8_t _SourceID=0);
+     bool Open();
++    void Pause(int msec) { if (port) port->Pause(msec); }
+     #ifdef ARDUINO
+     // Begin is obsolete. Use Open(...)
+     void Begin(HardwareSerial *_port, uint8_t _SourceID=0, unsigned long _baud=4800);

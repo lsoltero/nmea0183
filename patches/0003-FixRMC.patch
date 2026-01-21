@@ -1,0 +1,121 @@
+Index: nmea0183/NMEA0183Messages.cpp
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.cpp
++++ nmea0183/NMEA0183Messages.cpp
+@@ -300,8 +300,57 @@ bool NMEA0183ParseRMB_nc(const tNMEA0183
+ }
+ 
+ //*****************************************************************************
++// $GPRMB,A,0.15,R,WOUBRG,WETERB,5213.400,N,00438.400,E,009.4,180.2,5.5,V*hh
++// Internal units:
++//   rmb.xte, rmb.dtw in meters
++//   rmb.btw in radians
++//   rmb.vmg in m/s
++bool NMEA0183SetRMB(tNMEA0183Msg &NMEA0183Msg, const tRMB &RMB, const char *Src) {
++  if ( !NMEA0183Msg.Init("RMB", Src) ) return false;
++
++  // Field 0: status
++  if ( !NMEA0183Msg.AddStrField(RMB.status == 'A' ? "A" : "V") ) return false;
++
++  // Field 1: XTE in nautical miles (parser: nm -> meters)
++  // Field 2: direction to steer, 'R' means negative in this library (see ParseRMB_nc)
++  if ( !NMEA0183IsNA(RMB.xte) ) {
++    const double xte_m = RMB.xte;
++    const char *dir = (xte_m <= 0 ? "R" : "L");            // keep consistent with ParseRMB_nc sign convention
++    if ( !NMEA0183Msg.AddDoubleField(fabs(xte_m), 1.0/nmTom) ) return false;
++    if ( !NMEA0183Msg.AddStrField(dir) ) return false;
++  } else {
++    if ( !NMEA0183Msg.AddStrField("") ) return false;     // XTE
++    if ( !NMEA0183Msg.AddStrField("") ) return false;     // dir
++  }
++
++  // Field 3: origin waypoint ID
++  if ( !NMEA0183Msg.AddStrField(RMB.originID) ) return false;
++
++  // Field 4: destination waypoint ID
++  if ( !NMEA0183Msg.AddStrField(RMB.destID) ) return false;
++
++  // Field 5-8: destination lat/lon
++  if ( !NMEA0183Msg.AddLatitudeField(RMB.latitude) ) return false;
++  if ( !NMEA0183Msg.AddLongitudeField(RMB.longitude) ) return false;
++
++  // Field 9: distance to waypoint (nm) (parser: nm -> meters)
++  if ( !NMEA0183Msg.AddDoubleField(RMB.dtw, 1.0/nmTom) ) return false;
++
++  // Field 10: bearing to waypoint (deg) (parser: deg -> rad)
++  if ( !NMEA0183Msg.AddDoubleField(RMB.btw, radToDeg) ) return false;
++
++  // Field 11: VMG (knots) (parser: kn -> m/s)
++  if ( !NMEA0183Msg.AddDoubleField(RMB.vmg, 1.0/knToms) ) return false;
++
++  // Field 12: arrival alarm
++  if ( !NMEA0183Msg.AddStrField(RMB.arrivalAlarm == 'A' ? "A" : "V") ) return false;
++
++  return true;
++}
++
++//*****************************************************************************
+ // $GPRMC,092348.00,A,6035.04228,N,02115.15472,E,0.01,272.61,060815,7.2,E,D*34
+-bool NMEA0183ParseRMC_nc(const tNMEA0183Msg &NMEA0183Msg, double &GPSTime, double &Latitude, double &Longitude,
++bool NMEA0183ParseRMC_nc(const tNMEA0183Msg &NMEA0183Msg, double &GPSTime, char &Status, double &Latitude, double &Longitude,
+                       double &TrueCOG, double &SOG, unsigned long &DaysSince1970, double &Variation, time_t *DateTime) {
+   bool result=( NMEA0183Msg.FieldCount()>=11 );
+ 
+@@ -309,6 +358,7 @@ bool NMEA0183ParseRMC_nc(const tNMEA0183
+     time_t lDT;
+ 
+     GPSTime=NMEA0183GPTimeToSeconds(NMEA0183Msg.Field(0));
++    Status=NMEA0183Msg.Field(1)[0];
+     Latitude=LatLonToDouble(NMEA0183Msg.Field(2),NMEA0183Msg.Field(3)[0]);
+     Longitude=LatLonToDouble(NMEA0183Msg.Field(4),NMEA0183Msg.Field(5)[0]);
+     SOG=atof(NMEA0183Msg.Field(6))*knToms;
+@@ -337,7 +387,7 @@ bool NMEA0183SetRMC(tNMEA0183Msg &NMEA01
+   if ( GPSTime!=NMEA0183DoubleNA ) {
+     NMEA0183Msg.AddStrField("A");
+   } else {
+-    NMEA0183Msg.AddEmptyField();
++    NMEA0183Msg.AddStrField("V");
+   }
+   if ( !NMEA0183Msg.AddLatitudeField(Latitude) ) return false;
+   if ( !NMEA0183Msg.AddLongitudeField(Longitude) ) return false;
+@@ -792,4 +842,4 @@ bool NMEA0183ParseZDA(const tNMEA0183Msg
+ 
+ 	  
+ 	  
+-	  
+\ No newline at end of file
++	  
+Index: nmea0183/NMEA0183Messages.h
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.h
++++ nmea0183/NMEA0183Messages.h
+@@ -231,21 +231,25 @@ inline bool NMEA0183ParseRMB(const tNMEA
+ }
+ 
+ //*****************************************************************************
++// RMB - Recommended Minimum Navigation Information
++bool NMEA0183SetRMB(tNMEA0183Msg &NMEA0183Msg, const tRMB &rmb, const char *Src="GP");
++
++//*****************************************************************************
+ // RMC
+-bool NMEA0183ParseRMC_nc(const tNMEA0183Msg &NMEA0183Msg, double &GPSTime, double &Latitude, double &Longitude,
++bool NMEA0183ParseRMC_nc(const tNMEA0183Msg &NMEA0183Msg, double &GPSTime, char &Status, double &Latitude, double &Longitude,
+                       double &TrueCOG, double &SOG, unsigned long &DaysSince1970, double &Variation, time_t *DateTime=0);
+ 
+-inline bool NMEA0183ParseRMC(const tNMEA0183Msg &NMEA0183Msg, double &GPSTime, double &Latitude, double &Longitude,
++inline bool NMEA0183ParseRMC(const tNMEA0183Msg &NMEA0183Msg, double &GPSTime, char &Status, double &Latitude, double &Longitude,
+                       double &TrueCOG, double &SOG, unsigned long &DaysSince1970, double &Variation, time_t *DateTime=0) {
+   (void)DateTime;
+   return (NMEA0183Msg.IsMessageCode("RMC")
+-            ?NMEA0183ParseRMC_nc(NMEA0183Msg, GPSTime, Latitude, Longitude, TrueCOG, SOG, DaysSince1970, Variation, DateTime)
++            ?NMEA0183ParseRMC_nc(NMEA0183Msg, GPSTime, Status, Latitude, Longitude, TrueCOG, SOG, DaysSince1970, Variation, DateTime)
+             :false);
+ }
+ 
+ inline bool NMEA0183ParseRMC(const tNMEA0183Msg &NMEA0183Msg, tRMC &rmc, time_t *DateTime=0) {
+ 
+-	return NMEA0183ParseRMC(NMEA0183Msg, rmc.GPSTime, rmc.latitude, rmc.longitude, rmc.trueCOG, rmc.SOG, rmc.daysSince1970, rmc.variation, DateTime);
++	return NMEA0183ParseRMC(NMEA0183Msg, rmc.GPSTime, rmc.status, rmc.latitude, rmc.longitude, rmc.trueCOG, rmc.SOG, rmc.daysSince1970, rmc.variation, DateTime);
+ }
+ 
+ bool NMEA0183SetRMC(tNMEA0183Msg &NMEA0183Msg, double GPSTime, double Latitude, double Longitude,

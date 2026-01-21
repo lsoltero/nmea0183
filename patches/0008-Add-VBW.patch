@@ -1,0 +1,128 @@
+Index: nmea0183/NMEA0183Messages.h
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.h
++++ nmea0183/NMEA0183Messages.h
+@@ -276,6 +276,47 @@ bool NMEA0183SetVTG(tNMEA0183Msg &NMEA01
+ bool NMEA0183BuildVTG(char* msg, const char Src[], double TrueCOG, double MagneticCOG, double SOG);
+ 
+ //*****************************************************************************
++// VBW - Dual Ground/Water Speed
++// Speeds returned in ms
++// Transverse speed: "-" = port, Longitudinal speed: "-" = astern
++// Status V=invalid, A=valid
++bool NMEA0183ParseVBW_nc(const tNMEA0183Msg &NMEA0183Msg,
++			 double &LongitudinalWaterSpeed,
++			 double &TransverseWaterSpeed,
++			 double &LongitudinalGroundSspeed,
++			 double &TransverseGroundSpeed,
++			 double &SternTransverseWaterSpeed,
++			 double &SternTransverseGroundSpeed);
++
++inline bool NMEA0183ParseVBW(const tNMEA0183Msg &NMEA0183Msg,
++			     double &LongitudinalWaterSpeed,
++			     double &TransverseWaterSpeed,
++			     double &LongitudinalGroundSspeed,
++			     double &TransverseGroundSpeed,
++			     double &SternTransverseWaterSpeed,
++			     double &SternTransverseGroundSpeed) {
++  return(NMEA0183Msg.IsMessageCode("VBW")
++	 ?NMEA0183ParseVBW_nc(NMEA0183Msg,
++			      LongitudinalWaterSpeed,
++			      TransverseWaterSpeed,
++			      LongitudinalGroundSspeed,
++			      TransverseGroundSpeed,
++			      SternTransverseWaterSpeed,
++			      SternTransverseGroundSpeed)
++	 :false);
++}
++
++bool NMEA0183SetVBW(tNMEA0183Msg &NMEA0183Msg,
++		    double LongitudinalWaterSpeed, 
++		    double TransverseWaterSpeed, 
++		    double LongitudinalGroundSspeed,
++		    double TransverseGroundSpeed,
++		    double SternTransverseWaterSpeed,
++		    double SternTransverseGroundSpeed,
++		    const char *Src="VW");
++
++
++//*****************************************************************************
+ // TrueHeading,MagneticHeading will be returned be in radians
+ // SOW will be returned in m/s
+ bool NMEA0183ParseVHW_nc(const tNMEA0183Msg &NMEA0183Msg, double &TrueHeading, double &MagneticHeading, double &SOW);
+Index: nmea0183/NMEA0183Messages.cpp
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.cpp
++++ nmea0183/NMEA0183Messages.cpp
+@@ -446,6 +446,71 @@ bool NMEA0183SetVTG(tNMEA0183Msg &NMEA01
+ }
+ 
+ //*****************************************************************************
++// VBW - Dual Ground/Water Speed
++// $VWVBW,x.x,x.x,A,x.x,x.x,A,x.x,A,x.x,A*hh
++// Status V=invalid, A=valid
++bool NMEA0183ParseVBW_nc(tNMEA0183Msg &NMEA0183Msg,
++			 double &LongitudinalWaterSpeed,
++			 double &TransverseWaterSpeed,
++			 double &LongitudinalGroundSspeed,
++			 double &TransverseGroundSpeed,
++			 double &SternTransverseWaterSpeed,
++			 double &SternTransverseGroundSpeed) {
++
++  bool result=( NMEA0183Msg.FieldCount()>=10 );
++
++  if ( result ) {
++    LongitudinalWaterSpeed = NMEA0183DoubleNA;
++    TransverseWaterSpeed = NMEA0183DoubleNA;
++    LongitudinalGroundSspeed = NMEA0183DoubleNA;
++    TransverseGroundSpeed = NMEA0183DoubleNA;
++    SternTransverseWaterSpeed = NMEA0183DoubleNA;
++    SternTransverseGroundSpeed = NMEA0183DoubleNA;
++
++    if ( NMEA0183Msg.Field(2)[0] == 'A' ) {
++      LongitudinalWaterSpeed = NMEA0183GetDouble(NMEA0183Msg.Field(0),knToms);
++      TransverseWaterSpeed = NMEA0183GetDouble(NMEA0183Msg.Field(1),knToms);
++    }
++    if ( NMEA0183Msg.Field(5)[0] == 'A' ) {
++      LongitudinalGroundSspeed = NMEA0183GetDouble(NMEA0183Msg.Field(3),knToms);
++      TransverseGroundSpeed = NMEA0183GetDouble(NMEA0183Msg.Field(4),knToms);
++    }
++    if ( NMEA0183Msg.Field(7)[0] == 'A' ) {
++      SternTransverseWaterSpeed =  NMEA0183GetDouble(NMEA0183Msg.Field(6),knToms);
++    }
++    if ( NMEA0183Msg.Field(9)[0] == 'A' ) {
++      SternTransverseGroundSpeed = NMEA0183GetDouble(NMEA0183Msg.Field(8),knToms);
++    }
++  }
++  return result;
++}
++
++bool NMEA0183SetVBW(tNMEA0183Msg &NMEA0183Msg,
++		    double LongitudinalWaterSpeed,
++		    double TransverseWaterSpeed,
++		    double LongitudinalGroundSspeed,
++		    double TransverseGroundSpeed,
++		    double SternTransverseWaterSpeed,
++		    double SternTransverseGroundSpeed,
++		    const char *Src) {
++  if ( !NMEA0183Msg.Init("VBW",Src) ) return false;
++
++  const char *valid = LongitudinalWaterSpeed == NMEA0183DoubleNA && TransverseWaterSpeed == NMEA0183DoubleNA ? "V" : "A";
++  if ( !NMEA0183Msg.AddDoubleField(LongitudinalWaterSpeed, msTokn) ) return false;
++  if ( !NMEA0183Msg.AddDoubleField(TransverseWaterSpeed, msTokn,tNMEA0183Msg::DefDoubleFormat, valid) ) return false;
++
++  valid = TransverseGroundSpeed == NMEA0183DoubleNA && LongitudinalGroundSspeed == NMEA0183DoubleNA ? "V" : "A";
++  if ( !NMEA0183Msg.AddDoubleField(LongitudinalGroundSspeed,msTokn) ) return false;
++  if ( !NMEA0183Msg.AddDoubleField(TransverseGroundSpeed, msTokn, tNMEA0183Msg::DefDoubleFormat, valid) ) return false;
++
++  if ( !NMEA0183Msg.AddDoubleField(SternTransverseWaterSpeed, msTokn, tNMEA0183Msg::DefDoubleFormat, SternTransverseWaterSpeed == NMEA0183DoubleNA ? "V" : "A") ) return false;
++
++  if ( !NMEA0183Msg.AddDoubleField(SternTransverseGroundSpeed, msTokn, tNMEA0183Msg::DefDoubleFormat, SternTransverseGroundSpeed == NMEA0183DoubleNA ? "V" : "A") ) return false;
++
++  return true;
++}
++
++//*****************************************************************************
+ // $VWVHW,x.x,T,x.x,M,x.x,N,x.x,K*24
+ bool NMEA0183ParseVHW_nc(const tNMEA0183Msg &NMEA0183Msg, double &TrueHeading, double &MagneticHeading, double &SOW) {
+   bool result=( NMEA0183Msg.FieldCount()>=8 );

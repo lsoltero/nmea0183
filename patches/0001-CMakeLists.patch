@@ -1,0 +1,51 @@
+Index: nmea0183/CMakeLists.txt
+===================================================================
+--- /dev/null
++++ nmea0183/CMakeLists.txt
+@@ -0,0 +1,46 @@
++
++cmake_minimum_required(VERSION 3.0)
++project(NMEA0183)
++
++add_compile_options(
++  -Wall
++  -Werror
++  -std=c++11
++  -g
++)
++
++enable_testing()
++
++file(GLOB headers *.h)
++install(FILES ${headers}
++	DESTINATION include/nmea0183
++)
++
++set(src_files
++    NMEA0183.cpp
++    NMEA0183LinuxStream.cpp
++    NMEA0183Messages.cpp
++    NMEA0183Msg.cpp
++    NMEA0183Stream.cpp
++)
++
++add_library(nmea0183-shared SHARED ${src_files})
++add_library(nmea0183 STATIC ${src_files})
++
++set_target_properties(nmea0183-shared PROPERTIES OUTPUT_NAME nmea0183 CLEAN_DIRECT_OUTPUT 1)
++
++install(TARGETS nmea0183 nmea0183-shared
++	LIBRARY DESTINATION lib
++	ARCHIVE DESTINATION lib
++)
++
++target_include_directories(nmea0183-shared
++  PUBLIC
++  ${CMAKE_CURRENT_SOURCE_DIR}
++)
++
++target_include_directories(nmea0183
++  PUBLIC
++  ${CMAKE_CURRENT_SOURCE_DIR}
++)
++
