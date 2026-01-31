@@ -1,0 +1,108 @@
+Index: nmea0183/NMEA0183Messages.cpp
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.cpp
++++ nmea0183/NMEA0183Messages.cpp
+@@ -1509,6 +1509,71 @@ bool NMEA0183SetGSV(tNMEA0183Msg &NMEA01
+ 	return true; 
+ }
+ 	  
++//*****************************************************************************
++// GSA - GPS DOP and Active Satellites
++// $--GSA,a,a,xx,xx,xx,xx,xx,xx,xx,xx,xx,xx,xx,xx,x.x,x.x,x.x*hh
++bool NMEA0183ParseGSA_nc(const tNMEA0183Msg &NMEA0183Msg, tGSA &gsa) {
++    bool result = (NMEA0183Msg.FieldCount() >= 17);
++    
++    if (result) {
++        // Mode: M=Manual, A=Automatic
++        gsa.mode = NMEA0183Msg.Field(0)[0];
++        
++        // Fix type: 1=no fix, 2=2D, 3=3D
++        gsa.fixType = atoi(NMEA0183Msg.Field(1));
++        
++        // PRNs of satellites used (fields 2-13)
++        for (int i = 0; i < 12; i++) {
++            const char *field = NMEA0183Msg.Field(i + 2);
++            if (field[0] != 0) {
++                gsa.satellitePRN[i] = atoi(field);
++            } else {
++                gsa.satellitePRN[i] = 0;  // Empty field
++            }
++        }
++        
++        // PDOP, HDOP, VDOP
++        gsa.PDOP = NMEA0183GetDouble(NMEA0183Msg.Field(14));
++        gsa.HDOP = NMEA0183GetDouble(NMEA0183Msg.Field(15));
++        gsa.VDOP = NMEA0183GetDouble(NMEA0183Msg.Field(16));
++    }
++    
++    return result;
++}
++
++//*****************************************************************************
++bool NMEA0183SetGSA(tNMEA0183Msg &NMEA0183Msg, const tGSA &gsa, const char *Src) {
++    if (!NMEA0183Msg.Init("GSA", Src)) return false;
++    
++    // Mode
++    char modeStr[2];
++    modeStr[0] = (gsa.mode == 'M' || gsa.mode == 'A') ? gsa.mode : 'A';
++    modeStr[1] = '\0';
++    if (!NMEA0183Msg.AddStrField(modeStr)) return false;
++    
++    // Fix type
++    if (!NMEA0183Msg.AddUInt32Field(gsa.fixType)) return false;
++    
++    // Satellite PRNs (12 fields)
++    for (int i = 0; i < 12; i++) {
++        if (gsa.satellitePRN[i] > 0) {
++            if (!NMEA0183Msg.AddUInt32Field(gsa.satellitePRN[i])) return false;
++        } else {
++            if (!NMEA0183Msg.AddEmptyField()) return false;
++        }
++    }
++    
++    // PDOP
++    if (!NMEA0183Msg.AddDoubleField(gsa.PDOP)) return false;
++    
++    // HDOP
++    if (!NMEA0183Msg.AddDoubleField(gsa.HDOP)) return false;
++    
++    // VDOP
++    if (!NMEA0183Msg.AddDoubleField(gsa.VDOP)) return false;
++    
++    return true;
++}
+ 
+ 	  
+ 	  
+Index: nmea0183/NMEA0183Messages.h
+===================================================================
+--- nmea0183.orig/NMEA0183Messages.h
++++ nmea0183/NMEA0183Messages.h
+@@ -855,4 +855,27 @@ bool NMEA0183SetGSV(tNMEA0183Msg &NMEA01
+ 					const char *Src="GP");
+ 
+ 
++//*****************************************************************************
++// GSA - GPS DOP and Active Satellites
++struct tGSA {
++    char mode;              // M=Manual, A=Automatic
++    uint8_t fixType;        // 1=no fix, 2=2D, 3=3D
++    uint32_t satellitePRN[12];  // PRNs of satellites used for fix (0 = not used)
++    double PDOP;            // Position Dilution of Precision
++    double HDOP;            // Horizontal Dilution of Precision  
++    double VDOP;            // Vertical Dilution of Precision
++};
++
++//*****************************************************************************
++// GSA - GPS DOP and Active Satellites
++// $--GSA,a,a,xx,xx,xx,xx,xx,xx,xx,xx,xx,xx,xx,xx,x.x,x.x,x.x*hh
++bool NMEA0183ParseGSA_nc(const tNMEA0183Msg &NMEA0183Msg, tGSA &gsa);
++
++inline bool NMEA0183ParseGSA(const tNMEA0183Msg &NMEA0183Msg, tGSA &gsa) {
++    return (NMEA0183Msg.IsMessageCode("GSA") ?
++            NMEA0183ParseGSA_nc(NMEA0183Msg, gsa) : false);
++}
++
++bool NMEA0183SetGSA(tNMEA0183Msg &NMEA0183Msg, const tGSA &gsa, const char *Src="GP");
++
+ #endif
